@@ -18,7 +18,6 @@ if _project_root not in sys.path:
 
 import logging
 
-import arviz as az
 import numpy as np
 import pandas as pd
 import plotly.graph_objects as go
@@ -28,9 +27,6 @@ from app.components.match_card import render_match_card
 from app.components.metrics_panel import render_metrics_panel
 from app.components.score_matrix import render_score_matrix
 from data.repository import MatchRepository, ModelRepository
-from evaluation.backtest import plot_rps_over_time, walk_forward_backtest
-from evaluation.metrics import compute_all_metrics
-from model.calibration import plot_reliability_diagram
 from model.markets import (
     compute_btts,
     compute_over_under,
@@ -301,6 +297,9 @@ elif page == "Performance do Modelo":
     if preds_results.empty:
         st.info("Sem previsões com resultados disponíveis para avaliação.")
     else:
+        from evaluation.metrics import compute_all_metrics
+        from model.calibration import plot_reliability_diagram
+
         metrics_df = compute_all_metrics(preds_results)
         render_metrics_panel(metrics_df)
 
@@ -324,6 +323,7 @@ elif page == "Performance do Modelo":
         if not finished.empty and len(finished) > 200:
             with st.spinner("Calculando backtest …"):
                 try:
+                    from evaluation.backtest import plot_rps_over_time, walk_forward_backtest
                     bt = walk_forward_backtest(finished, min_train_seasons=2)
                     fig_rps = plot_rps_over_time(bt)
                     st.plotly_chart(fig_rps, use_container_width=True)
@@ -444,6 +444,7 @@ elif page == "Parâmetros":
             latest_trace = trace_files[0]
             st.caption(f"Arquivo de trace: `{latest_trace.name}`")
             try:
+                import arviz as az
                 idata = az.from_netcdf(str(latest_trace))
                 axes = az.plot_trace(
                     idata,
