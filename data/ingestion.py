@@ -286,14 +286,20 @@ class APIFootballClient:
         home_data = raw[0] if len(raw) > 0 else {}
         away_data = raw[1] if len(raw) > 1 else {}
 
+        def _pct(value: int | float | str | None) -> float | None:
+            """Strip trailing '%' and convert to float."""
+            if value is None:
+                return None
+            return float(str(value).rstrip("%"))
+
         return {
             "match_id": fixture_id,
             "home_shots": _stat(home_data, "Total Shots"),
             "away_shots": _stat(away_data, "Total Shots"),
             "home_shots_on_target": _stat(home_data, "Shots on Goal"),
             "away_shots_on_target": _stat(away_data, "Shots on Goal"),
-            "home_possession": _stat(home_data, "Ball Possession"),
-            "away_possession": _stat(away_data, "Ball Possession"),
+            "home_possession": _pct(_stat(home_data, "Ball Possession")),
+            "away_possession": _pct(_stat(away_data, "Ball Possession")),
             "home_xg": _stat(home_data, "expected_goals"),
             "away_xg": _stat(away_data, "expected_goals"),
         }
