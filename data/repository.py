@@ -102,6 +102,7 @@ class MatchRepository:
                 self._client.table("matches")
                 .select("*")
                 .eq("status", "FT")
+                .limit(10000)
             )
             if season is not None:
                 query = query.eq("season", season)
