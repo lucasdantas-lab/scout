@@ -1,6 +1,6 @@
 # Core scientific stack
-numpy==2.3.5
-pandas==2.3.3
+numpy==2.2.6
+pandas==2.2.3
 scipy==1.15.3
 
 # Bayesian inference
@@ -18,7 +18,7 @@ streamlit==1.55.0
 plotly==6.6.0
 
 # ML calibration & metrics
-scikit-learn==1.8.0
+scikit-learn==1.7.2
 
 # Environment
 python-dotenv==1.2.2
