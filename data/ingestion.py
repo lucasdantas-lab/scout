@@ -95,7 +95,7 @@ class APIFootballClient:
 
     async def fetch_fixtures(
         self, season: int, league_id: int = LEAGUE_ID
-    ) -> list[dict]:
+    ) -> tuple[list[dict], list[dict]]:
         """Fetch all fixtures for a given season and league.
 
         Args:
@@ -103,12 +103,23 @@ class APIFootballClient:
             league_id: API-Football league identifier.
 
         Returns:
-            List of normalised match dicts compatible with the `matches` table.
+            Tuple of (matches, teams) where matches is a list of dicts
+            compatible with the `matches` table and teams is a list of
+            dicts compatible with the `teams` table.
         """
         raw = await self._get(
             "/fixtures", {"league": league_id, "season": season}
         )
-        return [self._normalise_fixture(f) for f in raw]
+        matches = [self._normalise_fixture(f) for f in raw]
+        # Deduplicate teams by id
+        teams_by_id: dict[int, dict] = {}
+        for f in raw:
+            for side in ("home", "away"):
+                t = f.get("teams", {}).get(side, {})
+                tid = t.get("id")
+                if tid and tid not in teams_by_id:
+                    teams_by_id[tid] = self._normalise_team(t)
+        return matches, list(teams_by_id.values())
 
     async def fetch_statistics(self, fixture_id: int) -> dict | None:
         """Fetch per-fixture statistics.
@@ -127,7 +138,7 @@ class APIFootballClient:
 
     async def fetch_upcoming(
         self, league_id: int = LEAGUE_ID, next_n: int = 10
-    ) -> list[dict]:
+    ) -> tuple[list[dict], list[dict]]:
         """Fetch the next N scheduled (not yet played) fixtures.
 
         Args:
@@ -135,12 +146,20 @@ class APIFootballClient:
             next_n: Maximum number of upcoming fixtures to retrieve.
 
         Returns:
-            List of normalised match dicts.
+            Tuple of (matches, teams).
         """
         raw = await self._get(
             "/fixtures", {"league": league_id, "next": next_n}
         )
-        return [self._normalise_fixture(f) for f in raw]
+        matches = [self._normalise_fixture(f) for f in raw]
+        teams_by_id: dict[int, dict] = {}
+        for f in raw:
+            for side in ("home", "away"):
+                t = f.get("teams", {}).get(side, {})
+                tid = t.get("id")
+                if tid and tid not in teams_by_id:
+                    teams_by_id[tid] = self._normalise_team(t)
+        return matches, list(teams_by_id.values())
 
     async def bulk_ingest(self, seasons: list[int]) -> list[dict]:
         """Orchestrate full ingestion for multiple seasons.
@@ -156,12 +175,17 @@ class APIFootballClient:
         """
         results: list[dict] = []
 
+        all_teams: dict[int, dict] = {}
+
         for season in seasons:
             logger.info("Ingesting season %d …", season)
-            fixtures = await self.fetch_fixtures(season)
+            fixtures, teams = await self.fetch_fixtures(season)
             logger.info(
                 "Season %d: %d fixtures found.", season, len(fixtures)
             )
+
+            for t in teams:
+                all_teams[t["id"]] = t
 
             finished = [f for f in fixtures if f.get("status") == "FT"]
             logger.info(
@@ -185,12 +209,33 @@ class APIFootballClient:
                     entry["stats"] = stats
                 results.append(entry)
 
-        logger.info("Bulk ingestion complete. Total records: %d", len(results))
-        return results
+        logger.info(
+            "Bulk ingestion complete. Teams: %d | Fixtures: %d",
+            len(all_teams),
+            len(results),
+        )
+        return results, list(all_teams.values())
 
     # ------------------------------------------------------------------
     # Normalisers
     # ------------------------------------------------------------------
+
+    @staticmethod
+    def _normalise_team(raw: dict) -> dict:
+        """Transform a raw API-Football team dict into DB-compatible format.
+
+        Args:
+            raw: Team object from the 'teams.home' or 'teams.away' field.
+
+        Returns:
+            Dict with keys matching the `teams` table columns.
+        """
+        return {
+            "id": raw.get("id"),
+            "name": raw.get("name"),
+            "short_name": raw.get("code"),
+            "city": None,  # not provided by this endpoint
+        }
 
     @staticmethod
     def _normalise_fixture(raw: dict) -> dict:

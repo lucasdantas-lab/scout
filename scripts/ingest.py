@@ -28,8 +28,19 @@ async def ingest_historical(seasons: list[int]) -> None:
     repo = MatchRepository()
 
     logger.info("Iniciando ingestão histórica para temporadas: %s", seasons)
-    records = await client.bulk_ingest(seasons)
+    records, teams = await client.bulk_ingest(seasons)
 
+    # 1. Upsert times primeiro (FK constraint)
+    teams_ok = 0
+    for team in teams:
+        try:
+            repo.upsert_team(team)
+            teams_ok += 1
+        except Exception as exc:
+            logger.warning("Falha ao upsert team_id=%s: %s", team.get("id"), exc)
+    logger.info("Times salvos: %d", teams_ok)
+
+    # 2. Upsert partidas e estatísticas
     upserted = 0
     errors = 0
     for entry in records:
@@ -47,7 +58,7 @@ async def ingest_historical(seasons: list[int]) -> None:
             )
 
     logger.info(
-        "Ingestão histórica concluída. Upserts: %d | Erros: %d",
+        "Ingestão histórica concluída. Partidas: %d | Erros: %d",
         upserted,
         errors,
     )
@@ -59,7 +70,13 @@ async def ingest_upcoming() -> None:
     repo = MatchRepository()
 
     logger.info("Buscando próximos jogos …")
-    fixtures = await client.fetch_upcoming(next_n=10)
+    fixtures, teams = await client.fetch_upcoming(next_n=10)
+
+    for team in teams:
+        try:
+            repo.upsert_team(team)
+        except Exception as exc:
+            logger.warning("Falha ao upsert team_id=%s: %s", team.get("id"), exc)
 
     for match in fixtures:
         try:
