@@ -29,7 +29,7 @@ if not SUPABASE_URL or not SUPABASE_KEY:
 # ---------------------------------------------------------------------------
 
 LEAGUE_ID: int = 71  # Brasileirão Série A
-SEASONS: list[int] = [2020, 2021, 2022, 2023, 2024]
+SEASONS: list[int] = [2022, 2023, 2024]  # 2020/2021 not available on current plan
 
 # ---------------------------------------------------------------------------
 # Model hyper-parameters
