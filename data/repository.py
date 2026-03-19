@@ -98,16 +98,26 @@ class MatchRepository:
             DataFrame with matches table columns.
         """
         try:
-            query = (
-                self._client.table("matches")
-                .select("*")
-                .eq("status", "FT")
-                .limit(10000)
-            )
-            if season is not None:
-                query = query.eq("season", season)
-            response = query.execute()
-            return pd.DataFrame(response.data)
+            all_rows = []
+            page_size = 1000
+            offset = 0
+            while True:
+                query = (
+                    self._client.table("matches")
+                    .select("*")
+                    .eq("status", "FT")
+                    .range(offset, offset + page_size - 1)
+                )
+                if season is not None:
+                    query = query.eq("season", season)
+                response = query.execute()
+                batch = response.data
+                all_rows.extend(batch)
+                if len(batch) < page_size:
+                    break
+                offset += page_size
+            logger.info("get_finished_matches: loaded %d rows.", len(all_rows))
+            return pd.DataFrame(all_rows)
         except Exception as exc:
             logger.error("Failed to fetch finished matches: %s", exc)
             raise

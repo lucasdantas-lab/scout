@@ -205,7 +205,7 @@ def sample_posterior(
             draws=draws,
             tune=tune,
             chains=chains,
-            target_accept=0.9,
+            target_accept=0.95,
             return_inferencedata=True,
             progressbar=True,
         )
