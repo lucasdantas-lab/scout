@@ -190,10 +190,11 @@ elif page == "Análise de Jogo":
     away_id = next((k for k, v in teams.items() if v == away_name), None)
 
     match_pred = pd.DataFrame()
-    if not predictions_df.empty and home_id and away_id:
+    has_cols = "home_team_id" in predictions_df.columns and "away_team_id" in predictions_df.columns
+    if not predictions_df.empty and has_cols and home_id and away_id:
         match_pred = predictions_df[
-            (predictions_df.get("home_team_id") == home_id)
-            & (predictions_df.get("away_team_id") == away_id)
+            (predictions_df["home_team_id"] == home_id)
+            & (predictions_df["away_team_id"] == away_id)
         ].sort_values("generated_at", ascending=False).head(1)
 
     if match_pred.empty:
