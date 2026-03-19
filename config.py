@@ -10,14 +10,22 @@ from pathlib import Path
 from dotenv import load_dotenv
 
 # ---------------------------------------------------------------------------
-# Environment
+# Environment — local (.env) or Streamlit Cloud (st.secrets)
 # ---------------------------------------------------------------------------
 
 load_dotenv(Path(__file__).parent / ".env")
 
-API_FOOTBALL_KEY: str = os.environ.get("API_FOOTBALL_KEY", "")
-SUPABASE_URL: str = os.environ.get("SUPABASE_URL", "")
-SUPABASE_KEY: str = os.environ.get("SUPABASE_KEY", "")
+def _get_secret(key: str) -> str:
+    """Read from st.secrets (Streamlit Cloud) or fall back to env var."""
+    try:
+        import streamlit as st
+        return st.secrets.get(key, os.environ.get(key, ""))
+    except Exception:
+        return os.environ.get(key, "")
+
+API_FOOTBALL_KEY: str = _get_secret("API_FOOTBALL_KEY")
+SUPABASE_URL: str = _get_secret("SUPABASE_URL")
+SUPABASE_KEY: str = _get_secret("SUPABASE_KEY")
 
 if not API_FOOTBALL_KEY:
     logging.warning("API_FOOTBALL_KEY is not set. Data ingestion will fail.")

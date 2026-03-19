@@ -36,3 +36,4 @@ traces/*.nc
 .pytest_cache/
 .coverage
 htmlcov/
+.streamlit/secrets.toml
