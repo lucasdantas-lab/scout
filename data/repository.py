@@ -213,19 +213,26 @@ class ModelRepository:
             raise
 
     def get_latest_predictions(self) -> pd.DataFrame:
-        """Retrieve all predictions, most recent first.
+        """Retrieve all predictions joined with match metadata.
 
         Returns:
-            DataFrame with predictions table columns.
+            DataFrame with predictions columns plus home_team_id, away_team_id,
+            round, match_date and season from the matches table.
         """
         try:
             response = (
                 self._client.table("predictions")
-                .select("*")
+                .select("*, matches(home_team_id, away_team_id, round, match_date, season)")
                 .order("generated_at", desc=True)
                 .execute()
             )
-            return pd.DataFrame(response.data)
+            rows = []
+            for item in response.data:
+                flat = {**item}
+                match_data = flat.pop("matches", {}) or {}
+                flat.update(match_data)
+                rows.append(flat)
+            return pd.DataFrame(rows)
         except Exception as exc:
             logger.error("Failed to fetch latest predictions: %s", exc)
             raise
