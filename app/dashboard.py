@@ -40,7 +40,7 @@ logger = logging.getLogger(__name__)
 
 st.set_page_config(
     page_title="SCOUT — Brasileirão Analytics",
-    page_icon="⚽",
+    page_icon="📈",
     layout="wide",
 )
 
@@ -116,7 +116,7 @@ teams = load_teams()
 # ===========================================================================
 
 if page == "Previsões":
-    st.title("⚽ SCOUT — Previsões Brasileirão Série A")
+    st.title("SCOUT — Previsões Brasileirão Série A")
 
     predictions_df = load_predictions()
 
@@ -161,7 +161,7 @@ if page == "Previsões":
                 prob_over25=float(row.get("prob_over25", 0.5)),
             )
 
-    if st.button("🔄 Gerar Previsões"):
+    if st.button("Gerar Previsões"):
         st.info(
             "Pipeline de predição em desenvolvimento. "
             "Execute o script de treinamento e ingestão primeiro."
@@ -172,7 +172,7 @@ if page == "Previsões":
 # ===========================================================================
 
 elif page == "Análise de Jogo":
-    st.title("🔍 Análise de Jogo")
+    st.title("Análise de Jogo")
 
     team_names = list(teams.values()) if teams else ["Time A", "Time B"]
     col_h, col_a = st.columns(2)
@@ -285,7 +285,7 @@ elif page == "Análise de Jogo":
 # ===========================================================================
 
 elif page == "Performance do Modelo":
-    st.title("📊 Performance do Modelo")
+    st.title("Performance do Modelo")
 
     preds_results = load_predictions_with_results()
 
@@ -342,7 +342,7 @@ elif page == "Performance do Modelo":
 # ===========================================================================
 
 elif page == "Parâmetros":
-    st.title("🔬 Parâmetros do Modelo")
+    st.title("Parâmetros do Modelo")
 
     try:
         from config import SUPABASE_URL, SUPABASE_KEY

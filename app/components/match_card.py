@@ -2,6 +2,26 @@
 
 import streamlit as st
 
+# SVG icons — Heroicons outline set (MIT)
+_SVG_UP = (
+    '<svg xmlns="http://www.w3.org/2000/svg" width="12" height="12" fill="none" '
+    'viewBox="0 0 24 24" stroke="currentColor" stroke-width="2.5">'
+    '<path stroke-linecap="round" stroke-linejoin="round" d="M4.5 10.5 12 3m0 0 7.5 7.5M12 3v18"/>'
+    "</svg>"
+)
+_SVG_DOWN = (
+    '<svg xmlns="http://www.w3.org/2000/svg" width="12" height="12" fill="none" '
+    'viewBox="0 0 24 24" stroke="currentColor" stroke-width="2.5">'
+    '<path stroke-linecap="round" stroke-linejoin="round" d="M19.5 13.5 12 21m0 0-7.5-7.5M12 21V3"/>'
+    "</svg>"
+)
+_SVG_DRAW = (
+    '<svg xmlns="http://www.w3.org/2000/svg" width="12" height="12" fill="none" '
+    'viewBox="0 0 24 24" stroke="currentColor" stroke-width="2.5">'
+    '<path stroke-linecap="round" stroke-linejoin="round" d="M5 12h14"/>'
+    "</svg>"
+)
+
 
 def render_match_card(
     match_date: str,
@@ -25,32 +45,36 @@ def render_match_card(
         prob_btts: Probability of both teams scoring in [0, 1].
         prob_over25: Probability of over 2.5 goals in [0, 1].
     """
-    # Determine outcome badge
     max_prob = max(prob_home, prob_draw, prob_away)
     if max_prob == prob_home:
-        badge_color = "green"
-        badge_label = f"▲ {home_team}"
+        badge_bg = "#166534"   # dark green
+        badge_icon = _SVG_UP
+        badge_text = home_team
     elif max_prob == prob_draw:
-        badge_color = "gray"
-        badge_label = "⇔ Empate"
+        badge_bg = "#374151"   # dark gray
+        badge_icon = _SVG_DRAW
+        badge_text = "Empate"
     else:
-        badge_color = "red"
-        badge_label = f"▼ {away_team}"
+        badge_bg = "#991b1b"   # dark red
+        badge_icon = _SVG_DOWN
+        badge_text = away_team
+
+    badge_html = (
+        f"<span style='display:inline-flex;align-items:center;gap:4px;"
+        f"background:{badge_bg};color:white;padding:2px 8px;"
+        f"border-radius:4px;font-size:0.75em;font-weight:600;"
+        f"letter-spacing:0.03em'>"
+        f"{badge_icon}{badge_text}</span>"
+    )
 
     with st.container(border=True):
         st.caption(match_date)
         col_badge, col_title = st.columns([1, 4])
         with col_badge:
-            st.markdown(
-                f"<span style='background:{badge_color};color:white;"
-                f"padding:2px 8px;border-radius:4px;font-size:0.8em'>"
-                f"{badge_label}</span>",
-                unsafe_allow_html=True,
-            )
+            st.markdown(badge_html, unsafe_allow_html=True)
         with col_title:
             st.markdown(f"**{home_team}** vs **{away_team}**")
 
-        # Probability bars
         col1, col2, col3 = st.columns(3)
         with col1:
             st.metric("Casa", f"{prob_home:.0%}")
