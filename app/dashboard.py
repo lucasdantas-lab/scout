@@ -197,92 +197,97 @@ elif page == "Análise de Jogo":
             & (predictions_df["away_team_id"] == away_id)
         ].sort_values("generated_at", ascending=False).head(1)
 
-    if match_pred.empty:
-        st.warning(
-            "Sem previsão salva para este confronto. "
-            "Usando λ padrão para demonstração."
-        )
-        lambda_home, lambda_away, rho = 1.4, 1.1, -0.1
-        score_mat = compute_score_matrix(lambda_home, lambda_away, rho)
-    else:
-        row = match_pred.iloc[0]
-        lambda_home = float(row.get("lambda_home", 1.4))
-        lambda_away = float(row.get("lambda_away", 1.1))
-        score_mat_raw = row.get("score_matrix")
-        if score_mat_raw:
-            import json
-            score_mat = np.array(
-                json.loads(score_mat_raw)
-                if isinstance(score_mat_raw, str)
-                else score_mat_raw,
-                dtype=float,
+    try:
+        if match_pred.empty:
+            st.info(
+                "Sem previsão salva para este confronto. "
+                "Exibindo análise com λ padrão (demonstração)."
             )
+            lambda_home, lambda_away, rho = 1.4, 1.1, -0.1
+            score_mat = compute_score_matrix(lambda_home, lambda_away, rho)
         else:
-            score_mat = compute_score_matrix(lambda_home, lambda_away, -0.1)
+            row = match_pred.iloc[0]
+            lambda_home = float(row.get("lambda_home", 1.4))
+            lambda_away = float(row.get("lambda_away", 1.1))
+            score_mat_raw = row.get("score_matrix")
+            if score_mat_raw:
+                import json
+                score_mat = np.array(
+                    json.loads(score_mat_raw)
+                    if isinstance(score_mat_raw, str)
+                    else score_mat_raw,
+                    dtype=float,
+                )
+            else:
+                score_mat = compute_score_matrix(lambda_home, lambda_away, -0.1)
 
-    probs_1x2 = compute_1x2(score_mat)
-    btts = compute_btts(score_mat)
-    ou = compute_over_under(score_mat)
-    top_scores = compute_exact_scores(score_mat)
+        probs_1x2 = compute_1x2(score_mat)
+        btts = compute_btts(score_mat)
+        ou = compute_over_under(score_mat)
+        top_scores = compute_exact_scores(score_mat)
 
-    # --- 1X2 gauges ---
-    st.subheader("Probabilidades 1X2")
-    col1, col2, col3 = st.columns(3)
-    for col, label, value, color in [
-        (col1, f"Casa ({home_name})", probs_1x2["home"], "#2196F3"),
-        (col2, "Empate", probs_1x2["draw"], "#9E9E9E"),
-        (col3, f"Fora ({away_name})", probs_1x2["away"], "#F44336"),
-    ]:
-        with col:
-            fig = go.Figure(
-                go.Indicator(
-                    mode="gauge+number",
-                    value=round(value * 100, 1),
-                    number={"suffix": "%"},
-                    title={"text": label},
-                    gauge={
-                        "axis": {"range": [0, 100]},
-                        "bar": {"color": color},
-                    },
+        # --- 1X2 gauges ---
+        st.subheader("Probabilidades 1X2")
+        col1, col2, col3 = st.columns(3)
+        for col, label, value, color in [
+            (col1, f"Casa ({home_name})", probs_1x2["home"], "#2196F3"),
+            (col2, "Empate", probs_1x2["draw"], "#9E9E9E"),
+            (col3, f"Fora ({away_name})", probs_1x2["away"], "#F44336"),
+        ]:
+            with col:
+                fig = go.Figure(
+                    go.Indicator(
+                        mode="gauge+number",
+                        value=round(value * 100, 1),
+                        number={"suffix": "%"},
+                        title={"text": label},
+                        gauge={
+                            "axis": {"range": [0, 100]},
+                            "bar": {"color": color},
+                        },
+                    )
+                )
+                fig.update_layout(height=250, margin={"t": 40, "b": 10})
+                st.plotly_chart(fig, use_container_width=True)
+
+        # --- BTTS / Over ---
+        col_b, col_o, col_lam = st.columns(3)
+        with col_b:
+            st.metric("BTTS (Ambas Marcam)", f"{btts:.0%}")
+        with col_o:
+            st.metric("Over 2.5", f"{ou['over']:.0%}")
+        with col_lam:
+            st.metric(f"λ — {home_name} / {away_name}", f"{lambda_home:.2f} / {lambda_away:.2f}")
+
+        # --- Score matrix ---
+        st.subheader("Matriz de Placares")
+        fig_mat = render_score_matrix(score_mat, home_name, away_name)
+        st.plotly_chart(fig_mat, use_container_width=True)
+
+        # --- Top exact scores ---
+        st.subheader("Placares Mais Prováveis")
+        scores_df = pd.DataFrame(top_scores)
+        if not scores_df.empty:
+            fig_bar = go.Figure(
+                go.Bar(
+                    x=[f"{r['prob']:.1%}" for r in top_scores],
+                    y=[r["score"] for r in top_scores],
+                    orientation="h",
+                    marker_color="royalblue",
                 )
             )
-            fig.update_layout(height=250, margin={"t": 40, "b": 10})
-            st.plotly_chart(fig, use_container_width=True)
-
-    # --- BTTS / Over ---
-    col_b, col_o, col_lam = st.columns(3)
-    with col_b:
-        st.metric("BTTS (Ambas Marcam)", f"{btts:.0%}")
-    with col_o:
-        st.metric("Over 2.5", f"{ou['over']:.0%}")
-    with col_lam:
-        st.metric(f"λ — {home_name} / {away_name}", f"{lambda_home:.2f} / {lambda_away:.2f}")
-
-    # --- Score matrix ---
-    st.subheader("Matriz de Placares")
-    fig_mat = render_score_matrix(score_mat, home_name, away_name)
-    st.plotly_chart(fig_mat, use_container_width=True)
-
-    # --- Top exact scores ---
-    st.subheader("Placares Mais Prováveis")
-    scores_df = pd.DataFrame(top_scores)
-    if not scores_df.empty:
-        fig_bar = go.Figure(
-            go.Bar(
-                x=[f"{r['prob']:.1%}" for r in top_scores],
-                y=[r["score"] for r in top_scores],
-                orientation="h",
-                marker_color="royalblue",
+            fig_bar.update_layout(
+                title="Top 12 placares",
+                xaxis_title="Probabilidade",
+                yaxis={"autorange": "reversed"},
+                template="plotly_white",
+                height=400,
             )
-        )
-        fig_bar.update_layout(
-            title="Top 12 placares",
-            xaxis_title="Probabilidade",
-            yaxis={"autorange": "reversed"},
-            template="plotly_white",
-            height=400,
-        )
-        st.plotly_chart(fig_bar, use_container_width=True)
+            st.plotly_chart(fig_bar, use_container_width=True)
+
+    except Exception as _exc:
+        st.error(f"Erro ao renderizar a análise: {_exc}")
+        logger.exception("Erro na página Análise de Jogo")
 
 # ===========================================================================
 # PAGE 3 — Performance do Modelo
