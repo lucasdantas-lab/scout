@@ -5,7 +5,7 @@ scipy==1.15.3
 
 # Bayesian inference
 pymc==5.28.2
-arviz==1.0.0
+arviz==0.23.4
 
 # HTTP client (async)
 httpx==0.28.1
