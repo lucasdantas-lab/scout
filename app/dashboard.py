@@ -10,8 +10,11 @@ Four pages:
 import sys
 from pathlib import Path
 
-# Allow imports from project root when running `streamlit run app/dashboard.py`
-sys.path.insert(0, str(Path(__file__).parent.parent))
+# Ensure project root is in sys.path when running directly:
+# `streamlit run app/dashboard.py`
+_project_root = str(Path(__file__).parent.parent.resolve())
+if _project_root not in sys.path:
+    sys.path.insert(0, _project_root)
 
 import logging
 
