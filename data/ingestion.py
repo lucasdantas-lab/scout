@@ -1,7 +1,8 @@
 """Async client for the API-Football REST API.
 
-Handles fixture fetching, per-fixture statistics, upcoming fixtures,
-and bulk ingestion with rate limiting and exponential back-off.
+Handles fixture fetching, per-fixture statistics, lineups, events,
+player ratings, upcoming fixtures, and bulk ingestion with rate
+limiting and exponential back-off.
 """
 
 import asyncio
@@ -9,6 +10,7 @@ import logging
 from typing import Any
 
 import httpx
+from tqdm import tqdm
 
 from config import API_FOOTBALL_KEY, LEAGUE_ID
 
@@ -104,14 +106,13 @@ class APIFootballClient:
 
         Returns:
             Tuple of (matches, teams) where matches is a list of dicts
-            compatible with the `matches` table and teams is a list of
-            dicts compatible with the `teams` table.
+            compatible with the ``matches`` table and teams is a list of
+            dicts compatible with the ``teams`` table.
         """
         raw = await self._get(
             "/fixtures", {"league": league_id, "season": season}
         )
         matches = [self._normalise_fixture(f) for f in raw]
-        # Deduplicate teams by id
         teams_by_id: dict[int, dict] = {}
         for f in raw:
             for side in ("home", "away"):
@@ -128,13 +129,56 @@ class APIFootballClient:
             fixture_id: API-Football fixture id.
 
         Returns:
-            Dict compatible with the `match_stats` table, or None when no
+            Dict compatible with the ``match_stats`` table, or None when no
             statistics are available for this fixture.
         """
         raw = await self._get("/fixtures/statistics", {"fixture": fixture_id})
         if not raw:
             return None
         return self._normalise_statistics(fixture_id, raw)
+
+    async def fetch_lineups(self, fixture_id: int) -> list[dict]:
+        """Fetch confirmed lineups for a fixture.
+
+        Args:
+            fixture_id: API-Football fixture id.
+
+        Returns:
+            List of dicts compatible with the ``match_lineups`` table.
+        """
+        raw = await self._get("/fixtures/lineups", {"fixture": fixture_id})
+        if not raw:
+            return []
+        return self._normalise_lineups(fixture_id, raw)
+
+    async def fetch_events(self, fixture_id: int) -> list[dict]:
+        """Fetch match events (goals, cards, substitutions).
+
+        Args:
+            fixture_id: API-Football fixture id.
+
+        Returns:
+            List of dicts compatible with the ``match_events`` table.
+        """
+        raw = await self._get("/fixtures/events", {"fixture": fixture_id})
+        if not raw:
+            return []
+        return self._normalise_events(fixture_id, raw)
+
+    async def fetch_players(self, fixture_id: int) -> list[dict]:
+        """Fetch per-player ratings for a fixture.
+
+        Args:
+            fixture_id: API-Football fixture id.
+
+        Returns:
+            List of dicts compatible with the ``players`` table
+            plus per-match ``rating`` and ``minutes_played`` fields.
+        """
+        raw = await self._get("/fixtures/players", {"fixture": fixture_id})
+        if not raw:
+            return []
+        return self._normalise_players(fixture_id, raw)
 
     async def fetch_upcoming(
         self, league_id: int = LEAGUE_ID, next_n: int = 10
@@ -161,20 +205,24 @@ class APIFootballClient:
                     teams_by_id[tid] = self._normalise_team(t)
         return matches, list(teams_by_id.values())
 
-    async def bulk_ingest(self, seasons: list[int]) -> list[dict]:
+    async def bulk_ingest(
+        self, seasons: list[int]
+    ) -> tuple[list[dict], list[dict]]:
         """Orchestrate full ingestion for multiple seasons.
 
-        For every finished fixture (status='FT') also fetches statistics.
-        Applies a rate limit of ``_RATE_LIMIT`` concurrent requests.
+        For every finished fixture (status='FT') fetches statistics,
+        lineups, events, and player ratings in parallel via
+        ``asyncio.gather``. Progress is displayed with ``tqdm``.
 
         Args:
             seasons: List of season years to ingest.
 
         Returns:
-            List of dicts, each containing 'match' and optionally 'stats' keys.
+            Tuple of (results, teams) where results is a list of dicts
+            containing 'match' and optionally 'stats', 'lineups',
+            'events', 'players' keys.
         """
         results: list[dict] = []
-
         all_teams: dict[int, dict] = {}
 
         for season in seasons:
@@ -192,22 +240,43 @@ class APIFootballClient:
                 "Season %d: %d finished fixtures.", season, len(finished)
             )
 
-            stats_tasks = [
-                self.fetch_statistics(f["id"]) for f in finished
-            ]
-            stats_list = await asyncio.gather(*stats_tasks, return_exceptions=True)
+            pbar = tqdm(
+                total=len(finished),
+                desc=f"Season {season}",
+                unit="match",
+            )
 
-            for fixture, stats in zip(finished, stats_list):
+            async def _fetch_all_for_fixture(fixture: dict) -> dict:
+                """Fetch stats, lineups, events, players for one fixture."""
+                fid = fixture["id"]
+                stats_coro = self.fetch_statistics(fid)
+                lineups_coro = self.fetch_lineups(fid)
+                events_coro = self.fetch_events(fid)
+                players_coro = self.fetch_players(fid)
+
+                gathered = await asyncio.gather(
+                    stats_coro, lineups_coro, events_coro, players_coro,
+                    return_exceptions=True,
+                )
                 entry: dict[str, Any] = {"match": fixture}
-                if isinstance(stats, Exception):
-                    logger.warning(
-                        "Stats fetch failed for fixture %d: %s",
-                        fixture["id"],
-                        stats,
-                    )
-                elif stats is not None:
-                    entry["stats"] = stats
-                results.append(entry)
+
+                labels = ("stats", "lineups", "events", "players")
+                for label, result in zip(labels, gathered):
+                    if isinstance(result, Exception):
+                        logger.warning(
+                            "%s fetch failed for fixture %d: %s",
+                            label, fid, result,
+                        )
+                    elif result:
+                        entry[label] = result
+
+                pbar.update(1)
+                return entry
+
+            tasks = [_fetch_all_for_fixture(f) for f in finished]
+            batch_results = await asyncio.gather(*tasks)
+            results.extend(batch_results)
+            pbar.close()
 
         logger.info(
             "Bulk ingestion complete. Teams: %d | Fixtures: %d",
@@ -228,13 +297,13 @@ class APIFootballClient:
             raw: Team object from the 'teams.home' or 'teams.away' field.
 
         Returns:
-            Dict with keys matching the `teams` table columns.
+            Dict with keys matching the ``teams`` table columns.
         """
         return {
             "id": raw.get("id"),
             "name": raw.get("name"),
             "short_name": raw.get("code"),
-            "city": None,  # not provided by this endpoint
+            "city": None,
         }
 
     @staticmethod
@@ -245,7 +314,7 @@ class APIFootballClient:
             raw: Single element from the API 'response' list.
 
         Returns:
-            Dict with keys matching the `matches` table columns.
+            Dict with keys matching the ``matches`` table columns.
         """
         fixture = raw.get("fixture", {})
         teams = raw.get("teams", {})
@@ -261,20 +330,22 @@ class APIFootballClient:
             "away_team_id": teams.get("away", {}).get("id"),
             "home_goals": goals.get("home"),
             "away_goals": goals.get("away"),
+            "home_xg": None,   # populated from statistics if available
+            "away_xg": None,
             "status": fixture.get("status", {}).get("short"),
             "venue": fixture.get("venue", {}).get("name"),
         }
 
     @staticmethod
     def _normalise_statistics(fixture_id: int, raw: list[dict]) -> dict:
-        """Transform raw per-team statistics into a `match_stats`-compatible dict.
+        """Transform raw per-team statistics into a ``match_stats``-compatible dict.
 
         Args:
             fixture_id: The fixture this stats payload belongs to.
             raw: 'response' list (two elements: home then away team stats).
 
         Returns:
-            Dict with keys matching the `match_stats` table columns.
+            Dict with keys matching the ``match_stats`` table columns.
         """
 
         def _stat(team_data: dict, key: str) -> int | float | None:
@@ -303,3 +374,119 @@ class APIFootballClient:
             "home_xg": _stat(home_data, "expected_goals"),
             "away_xg": _stat(away_data, "expected_goals"),
         }
+
+    @staticmethod
+    def _normalise_lineups(fixture_id: int, raw: list[dict]) -> list[dict]:
+        """Transform raw lineups into ``match_lineups``-compatible dicts.
+
+        Args:
+            fixture_id: The fixture this lineup belongs to.
+            raw: 'response' list with one entry per team.
+
+        Returns:
+            List of dicts for the ``match_lineups`` table.
+        """
+        rows: list[dict] = []
+        for team_entry in raw:
+            team_id = team_entry.get("team", {}).get("id")
+            if not team_id:
+                continue
+
+            for player in team_entry.get("startXI", []):
+                p = player.get("player", {})
+                rows.append({
+                    "match_id": fixture_id,
+                    "team_id": team_id,
+                    "player_id": p.get("id"),
+                    "is_starter": True,
+                    "minutes_played": 90,
+                    "rating": None,
+                })
+
+            for player in team_entry.get("substitutes", []):
+                p = player.get("player", {})
+                rows.append({
+                    "match_id": fixture_id,
+                    "team_id": team_id,
+                    "player_id": p.get("id"),
+                    "is_starter": False,
+                    "minutes_played": 0,
+                    "rating": None,
+                })
+
+        return rows
+
+    @staticmethod
+    def _normalise_events(fixture_id: int, raw: list[dict]) -> list[dict]:
+        """Transform raw events into ``match_events``-compatible dicts.
+
+        Args:
+            fixture_id: The fixture these events belong to.
+            raw: 'response' list with one entry per event.
+
+        Returns:
+            List of dicts for the ``match_events`` table.
+        """
+        type_map = {
+            "Goal": "goal",
+            "Card": "yellow_card",
+            "subst": "substitution",
+        }
+        rows: list[dict] = []
+        for event in raw:
+            etype_raw = event.get("type", "")
+            detail = event.get("detail", "")
+            etype = type_map.get(etype_raw, etype_raw.lower())
+
+            if etype_raw == "Card" and "Red" in detail:
+                etype = "red_card"
+
+            rows.append({
+                "match_id": fixture_id,
+                "team_id": event.get("team", {}).get("id"),
+                "event_type": etype,
+                "minute": event.get("time", {}).get("elapsed"),
+                "player_id": event.get("player", {}).get("id"),
+            })
+        return rows
+
+    @staticmethod
+    def _normalise_players(fixture_id: int, raw: list[dict]) -> list[dict]:
+        """Transform raw player stats into enriched player dicts.
+
+        Returns player data plus per-match ``rating`` and ``minutes_played``
+        fields suitable for both ``players`` and ``match_lineups`` updates.
+
+        Args:
+            fixture_id: The fixture these player stats belong to.
+            raw: 'response' list with one entry per team.
+
+        Returns:
+            List of dicts with player info and per-match performance.
+        """
+        rows: list[dict] = []
+        for team_entry in raw:
+            team_id = team_entry.get("team", {}).get("id")
+            if not team_id:
+                continue
+            for player_wrap in team_entry.get("players", []):
+                p = player_wrap.get("player", {})
+                stats_list = player_wrap.get("statistics", [])
+                stats = stats_list[0] if stats_list else {}
+                games = stats.get("games", {})
+
+                rating_str = games.get("rating")
+                rating = float(rating_str) if rating_str else None
+                minutes = games.get("minutes")
+                position = games.get("position")
+
+                rows.append({
+                    "fixture_id": fixture_id,
+                    "team_id": team_id,
+                    "player_id": p.get("id"),
+                    "player_name": p.get("name"),
+                    "position": position,
+                    "rating": rating,
+                    "minutes_played": minutes,
+                })
+        return rows

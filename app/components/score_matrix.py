@@ -48,17 +48,24 @@ def render_score_matrix(
         )
     )
 
-    # Highlight cells with prob > 10%
+    # Find most probable score
+    max_idx = np.unravel_index(mat.argmax(), mat.shape)
+
+    # Highlight cells with prob > 10% and mark most probable
     for i in range(display_size):
         for j in range(display_size):
             if mat[i, j] > 0.10:
+                is_max = (i, j) == max_idx
                 fig.add_shape(
                     type="rect",
                     x0=j - 0.5,
                     x1=j + 0.5,
                     y0=i - 0.5,
                     y1=i + 0.5,
-                    line={"color": "white", "width": 2},
+                    line={
+                        "color": "gold" if is_max else "white",
+                        "width": 3 if is_max else 2,
+                    },
                 )
 
     fig.update_layout(

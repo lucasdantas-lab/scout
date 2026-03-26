@@ -1,11 +1,14 @@
 """Contextual features specific to the Brasileirão Série A.
 
-Computes fatigue, match importance, and altitude adjustments.
+Computes fatigue (with travel penalty), match importance, and altitude
+adjustments.
 """
 
 import logging
 
 import pandas as pd
+
+from config import ALTITUDE_FACTOR
 
 logger = logging.getLogger(__name__)
 
@@ -21,7 +24,71 @@ _HIGH_ALTITUDE_CITIES = {
     "mt",
 }
 
-_ALTITUDE_FACTOR = 1.08  # penalty applied to visiting team at high-altitude venues
+# Major Brazilian football cities with approximate latitude/longitude
+# Used to estimate travel distances for fatigue computation.
+_CITY_COORDS: dict[str, tuple[float, float]] = {
+    "são paulo": (-23.55, -46.63),
+    "rio de janeiro": (-22.91, -43.17),
+    "belo horizonte": (-19.92, -43.94),
+    "porto alegre": (-30.03, -51.23),
+    "curitiba": (-25.43, -49.27),
+    "salvador": (-12.97, -38.51),
+    "fortaleza": (-3.72, -38.54),
+    "recife": (-8.05, -34.87),
+    "brasília": (-15.79, -47.88),
+    "goiânia": (-16.69, -49.25),
+    "cuiabá": (-15.60, -56.10),
+    "florianópolis": (-27.59, -48.55),
+    "belém": (-1.46, -48.50),
+    "são luís": (-2.53, -44.28),
+    "manaus": (-3.12, -60.02),
+    "natal": (-5.79, -35.21),
+    "maceió": (-9.67, -35.74),
+    "aracaju": (-10.91, -37.07),
+    "campinas": (-22.91, -47.06),
+    "santos": (-23.96, -46.33),
+    "londrina": (-23.31, -51.16),
+    "caxias do sul": (-29.17, -51.18),
+    "chapecó": (-27.10, -52.62),
+}
+
+_LONG_TRAVEL_KM = 1000.0
+_TRAVEL_FATIGUE_MULTIPLIER = 1.5
+
+
+def _estimate_distance_km(city_a: str | None, city_b: str | None) -> float:
+    """Estimate straight-line distance between two cities in km.
+
+    Args:
+        city_a: City name (or venue string).
+        city_b: City name (or venue string).
+
+    Returns:
+        Approximate distance in km, or 0.0 if either city is unknown.
+    """
+    import math
+
+    def _find_coords(name: str | None) -> tuple[float, float] | None:
+        if not name:
+            return None
+        name_lower = name.lower()
+        for city, coords in _CITY_COORDS.items():
+            if city in name_lower:
+                return coords
+        return None
+
+    coords_a = _find_coords(city_a)
+    coords_b = _find_coords(city_b)
+    if not coords_a or not coords_b:
+        return 0.0
+
+    # Haversine formula
+    lat1, lon1 = math.radians(coords_a[0]), math.radians(coords_a[1])
+    lat2, lon2 = math.radians(coords_b[0]), math.radians(coords_b[1])
+    dlat = lat2 - lat1
+    dlon = lon2 - lon1
+    a = math.sin(dlat / 2) ** 2 + math.cos(lat1) * math.cos(lat2) * math.sin(dlon / 2) ** 2
+    return 6371.0 * 2 * math.asin(math.sqrt(a))
 
 
 def compute_fatigue(
@@ -29,19 +96,21 @@ def compute_fatigue(
     team_id: int,
     match_date: pd.Timestamp,
     window_days: int = 21,
-) -> int:
-    """Count how many matches a team played in the preceding window.
+) -> float:
+    """Compute fatigue score accounting for match frequency and travel.
+
+    Away games with estimated travel > 1000km count as 1.5 games.
 
     Args:
         matches_df: Full match DataFrame with match_date, home_team_id,
-            away_team_id columns.
+            away_team_id, venue columns.
         team_id: Team to evaluate.
         match_date: Reference date (the upcoming match). Games on or after
             this date are excluded.
         window_days: Look-back period in days.
 
     Returns:
-        Integer count of matches in [match_date - window_days, match_date).
+        Fatigue score (float, typically 0 to ~6).
     """
     match_date = pd.Timestamp(match_date)
     if match_date.tzinfo is None:
@@ -56,7 +125,30 @@ def compute_fatigue(
         & (df["match_date"] >= window_start)
         & (df["match_date"] < match_date)
     )
-    return int(mask.sum())
+    recent = df[mask]
+
+    fatigue = 0.0
+    for _, row in recent.iterrows():
+        is_home = row["home_team_id"] == team_id
+        if is_home:
+            fatigue += 1.0
+        else:
+            # Estimate travel distance for away game
+            home_venue = row.get("venue", "")
+            # Try to figure out the team's home city from their home matches
+            team_home = df[df["home_team_id"] == team_id]
+            team_venue = (
+                team_home["venue"].mode().iloc[0]
+                if "venue" in team_home.columns and not team_home["venue"].mode().empty
+                else ""
+            )
+            dist = _estimate_distance_km(team_venue, home_venue)
+            if dist > _LONG_TRAVEL_KM:
+                fatigue += _TRAVEL_FATIGUE_MULTIPLIER
+            else:
+                fatigue += 1.0
+
+    return round(fatigue, 2)
 
 
 def compute_match_importance(
@@ -72,7 +164,6 @@ def compute_match_importance(
 
     Args:
         standings_df: DataFrame with columns: team_id, position, points.
-            Must contain all teams currently in the standings.
         team_id: Team to evaluate.
         round_num: Current round number.
         total_rounds: Total rounds in the season (38 for Série A).
@@ -92,7 +183,6 @@ def compute_match_importance(
         return 0.5
 
     position = int(team_row["position"].iloc[0])
-    rounds_remaining = max(total_rounds - round_num, 1)
     progress = round_num / total_rounds  # 0 → 1 across the season
 
     # Zones
@@ -108,9 +198,7 @@ def compute_match_importance(
     else:
         zone_score = 0.3
 
-    # Urgency increases as the season progresses
     urgency = 0.5 + 0.5 * progress
-
     importance = min(zone_score * urgency, 1.0)
     return round(importance, 4)
 
@@ -121,6 +209,26 @@ def _venue_is_high_altitude(venue: str | None) -> bool:
         return False
     venue_lower = venue.lower()
     return any(city in venue_lower for city in _HIGH_ALTITUDE_CITIES)
+
+
+def _get_altitude_factor(venue: str | None) -> float:
+    """Return the altitude factor for a venue using config ALTITUDE_FACTOR.
+
+    Args:
+        venue: Venue or city string.
+
+    Returns:
+        Altitude penalty factor (>= 1.0).
+    """
+    if not venue:
+        return ALTITUDE_FACTOR.get("default", 1.0)
+    venue_lower = venue.lower()
+    for city, factor in ALTITUDE_FACTOR.items():
+        if city == "default":
+            continue
+        if city.lower() in venue_lower:
+            return factor
+    return ALTITUDE_FACTOR.get("default", 1.0)
 
 
 def build_context_features(
@@ -144,8 +252,8 @@ def build_context_features(
     df = matches_df.copy()
     df["match_date"] = pd.to_datetime(df["match_date"], utc=True)
 
-    home_fatigue_list: list[int] = []
-    away_fatigue_list: list[int] = []
+    home_fatigue_list: list[float] = []
+    away_fatigue_list: list[float] = []
     home_importance_list: list[float] = []
     away_importance_list: list[float] = []
     altitude_list: list[float] = []
@@ -159,7 +267,6 @@ def build_context_features(
         away_fatigue_list.append(compute_fatigue(df, away_id, match_date))
 
         if standings_df is not None and "round" in row and pd.notna(row.get("round")):
-            # Extract numeric round
             try:
                 rnd = int(str(row["round"]).split()[-1])
             except (ValueError, IndexError):
@@ -175,9 +282,7 @@ def build_context_features(
             away_importance_list.append(0.5)
 
         venue = row.get("venue")
-        altitude_list.append(
-            _ALTITUDE_FACTOR if _venue_is_high_altitude(venue) else 1.0
-        )
+        altitude_list.append(_get_altitude_factor(venue))
 
     df["home_fatigue"] = home_fatigue_list
     df["away_fatigue"] = away_fatigue_list

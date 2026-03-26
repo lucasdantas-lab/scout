@@ -57,8 +57,44 @@ def generate_predictions(season: int | None, limit: int | None) -> None:
         home_adv, rho, intercept,
     )
 
+    # Save team parameters to model_parameters table
+    param_season = season if season is not None else int(matches["season"].max())
+    logger.info("Salvando parâmetros MLE para %d times (season=%d) …", len(team_params), param_season)
+    try:
+        from config import SUPABASE_URL, SUPABASE_KEY
+        from supabase import create_client as _create_client
+        _client = _create_client(SUPABASE_URL, SUPABASE_KEY)
+        # Clear old params for this season to prevent duplicates on re-runs
+        _client.table("model_parameters").delete().eq("season", param_season).execute()
+        params_saved = 0
+        for tid, p in team_params.items():
+            model_repo.save_parameters(
+                run_id="mle-v1",
+                team_id=tid,
+                attack=p["attack"],
+                defense=p["defense"],
+                season=param_season,
+                parameter_type="posterior_mean",
+            )
+            params_saved += 1
+        logger.info("Parâmetros salvos: %d", params_saved)
+    except Exception as exc:
+        logger.warning("Erro ao salvar parâmetros: %s", exc)
+
     if limit:
         matches = matches.head(limit)
+
+    # Remove existing predictions for the target matches to avoid duplicates
+    match_ids_to_predict = [int(r["id"]) for _, r in matches.iterrows()]
+    logger.info("Removendo previsões antigas para %d partidas …", len(match_ids_to_predict))
+    try:
+        from config import SUPABASE_URL as _URL, SUPABASE_KEY as _KEY
+        from supabase import create_client as _cc
+        _cl = _cc(_URL, _KEY)
+        for i in range(0, len(match_ids_to_predict), 100):
+            _cl.table("predictions").delete().in_("match_id", match_ids_to_predict[i:i+100]).execute()
+    except Exception as exc:
+        logger.warning("Erro ao remover previsões antigas: %s", exc)
 
     logger.info("Gerando previsões para %d partidas …", len(matches))
     saved = skipped = 0

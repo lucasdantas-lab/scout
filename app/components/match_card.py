@@ -32,6 +32,10 @@ def render_match_card(
     prob_away: float,
     prob_btts: float,
     prob_over25: float,
+    actual_result: str | None = None,
+    most_likely_score: str | None = None,
+    context_absences: list[str] | None = None,
+    context_confidence: float | None = None,
 ) -> None:
     """Render a match prediction card inside a bordered Streamlit container.
 
@@ -44,6 +48,10 @@ def render_match_card(
         prob_away: Probability of away win in [0, 1].
         prob_btts: Probability of both teams scoring in [0, 1].
         prob_over25: Probability of over 2.5 goals in [0, 1].
+        actual_result: Optional string like "2 x 1" shown when match is played.
+        most_likely_score: Optional string like "1-0" for the top scoreline.
+        context_absences: Optional list of key absences from context agent.
+        context_confidence: Optional confidence of context info (0-1).
     """
     max_prob = max(prob_home, prob_draw, prob_away)
     if max_prob == prob_home:
@@ -73,7 +81,16 @@ def render_match_card(
         with col_badge:
             st.markdown(badge_html, unsafe_allow_html=True)
         with col_title:
-            st.markdown(f"**{home_team}** vs **{away_team}**")
+            title = f"**{home_team}** vs **{away_team}**"
+            if actual_result:
+                title += f"  —  `{actual_result}`"
+            st.markdown(title)
+
+        # Context line: absences detected
+        if context_absences:
+            absence_str = ", ".join(context_absences[:4])
+            confidence_icon = "" if context_confidence and context_confidence >= 0.4 else " :warning:"
+            st.caption(f"Desfalques: {absence_str}{confidence_icon}")
 
         col1, col2, col3 = st.columns(3)
         with col1:
@@ -86,6 +103,10 @@ def render_match_card(
             st.metric("Fora", f"{prob_away:.0%}")
             st.progress(prob_away)
 
-        st.caption(
-            f"BTTS: **{prob_btts:.0%}**  ·  Over 2.5: **{prob_over25:.0%}**"
-        )
+        sub_parts = [
+            f"BTTS: **{prob_btts:.0%}**",
+            f"Over 2.5: **{prob_over25:.0%}**",
+        ]
+        if most_likely_score:
+            sub_parts.append(f"Placar: **{most_likely_score}**")
+        st.caption("  ·  ".join(sub_parts))

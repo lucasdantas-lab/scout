@@ -78,15 +78,19 @@ class TestCompute1x2:
 
 
 class TestComputeBTTS:
-    def test_range(self) -> None:
+    def test_range_from_lambdas(self) -> None:
+        btts = compute_btts(lambda_home=1.5, lambda_away=1.1)
+        assert 0.0 <= btts <= 1.0
+
+    def test_range_from_matrix(self) -> None:
         mat = compute_score_matrix(1.5, 1.1, -0.1)
-        btts = compute_btts(mat)
+        btts = compute_btts(score_matrix=mat)
         assert 0.0 <= btts <= 1.0
 
     def test_increases_with_both_lambdas(self) -> None:
-        mat_low = compute_score_matrix(0.5, 0.5, 0.0)
-        mat_high = compute_score_matrix(2.5, 2.5, 0.0)
-        assert compute_btts(mat_high) > compute_btts(mat_low)
+        btts_low = compute_btts(lambda_home=0.5, lambda_away=0.5)
+        btts_high = compute_btts(lambda_home=2.5, lambda_away=2.5)
+        assert btts_high > btts_low
 
 
 # ---------------------------------------------------------------------------

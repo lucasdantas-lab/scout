@@ -20,6 +20,15 @@ plotly==6.6.0
 # ML calibration & metrics
 scikit-learn>=1.3
 
+# Claude API (agents)
+anthropic==0.49.0
+
+# Web scraping (context agent)
+beautifulsoup4==4.13.4
+
+# Progress bars
+tqdm==4.67.1
+
 # Environment
 python-dotenv==1.2.2
 

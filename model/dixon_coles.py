@@ -68,6 +68,7 @@ def dixon_coles_log_likelihood(
     matches_df: pd.DataFrame,
     team_list: list[int],
     decay_rate: float = DECAY_RATE,
+    use_xg: bool = False,
 ) -> float:
     """Compute the (negative) Dixon-Coles log-likelihood.
 
@@ -82,9 +83,12 @@ def dixon_coles_log_likelihood(
     Args:
         params: Flat parameter vector.
         matches_df: DataFrame of finished matches with columns:
-            home_team_id, away_team_id, home_goals, away_goals, match_date.
+            home_team_id, away_team_id, home_goals, away_goals, match_date,
+            and optionally home_xg, away_xg.
         team_list: Ordered list of team ids matching parameter indices.
         decay_rate: Exponential decay applied as decay^(days_ago / 30).
+        use_xg: If True, use xG as the response variable instead of goals
+            (falls back to goals when xG is not available for a match).
 
     Returns:
         Negative log-likelihood (scalar, to be minimised).
@@ -116,8 +120,13 @@ def dixon_coles_log_likelihood(
         lambda_h = np.exp(home_adv + attack[hi] + defense[ai])
         lambda_a = np.exp(attack[ai] + defense[hi])
 
-        x = int(row["home_goals"])
-        y = int(row["away_goals"])
+        # Choose response variable: xG (rounded) or actual goals
+        if use_xg and pd.notna(row.get("home_xg")) and pd.notna(row.get("away_xg")):
+            x = int(round(float(row["home_xg"])))
+            y = int(round(float(row["away_xg"])))
+        else:
+            x = int(row["home_goals"])
+            y = int(row["away_goals"])
 
         tau = dixon_coles_correction(x, y, lambda_h, lambda_a, rho)
         if tau <= 0:
@@ -141,6 +150,7 @@ def dixon_coles_log_likelihood(
 def fit_dixon_coles_mle(
     matches_df: pd.DataFrame,
     decay_rate: float = DECAY_RATE,
+    use_xg: bool = False,
 ) -> dict[str, Any]:
     """Fit the Dixon-Coles model via Maximum Likelihood Estimation.
 
@@ -149,8 +159,10 @@ def fit_dixon_coles_mle(
 
     Args:
         matches_df: DataFrame of finished matches with columns:
-            home_team_id, away_team_id, home_goals, away_goals, match_date.
+            home_team_id, away_team_id, home_goals, away_goals, match_date,
+            and optionally home_xg, away_xg.
         decay_rate: Temporal decay rate.
+        use_xg: If True, use xG as response variable (with goals fallback).
 
     Returns:
         Dict with keys:
@@ -205,7 +217,7 @@ def fit_dixon_coles_mle(
     result = minimize(
         dixon_coles_log_likelihood,
         x0,
-        args=(df, team_list, decay_rate),
+        args=(df, team_list, decay_rate, use_xg),
         method="L-BFGS-B",
         bounds=bounds,
         options={"maxiter": 500, "ftol": 1e-9},

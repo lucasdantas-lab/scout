@@ -103,16 +103,22 @@ def _encode_result(home_goals: int, away_goals: int) -> int:
     return 2
 
 
-def compute_all_metrics(predictions_df: pd.DataFrame) -> pd.DataFrame:
+def compute_all_metrics(
+    predictions_df: pd.DataFrame,
+    breakdown_cols: list[str] | None = None,
+) -> pd.DataFrame:
     """Compute all evaluation metrics on a predictions DataFrame.
 
     Args:
         predictions_df: Must contain columns: prob_home, prob_draw, prob_away,
             home_goals, away_goals (the actual results).
+        breakdown_cols: Optional list of columns to group by for per-group
+            metrics (e.g. ['season', 'round']). When None, returns a single
+            aggregate row.
 
     Returns:
-        Single-row DataFrame with columns: brier_score, rps, log_loss,
-        n_samples.
+        DataFrame with columns: brier_score, rps, log_loss, n_samples
+        (plus breakdown columns if provided).
     """
     required = {"prob_home", "prob_draw", "prob_away", "home_goals", "away_goals"}
     missing = required - set(predictions_df.columns)
@@ -128,25 +134,123 @@ def compute_all_metrics(predictions_df: pd.DataFrame) -> pd.DataFrame:
             [{"brier_score": None, "rps": None, "log_loss": None, "n_samples": 0}]
         )
 
-    y_pred = df[["prob_home", "prob_draw", "prob_away"]].values
-    y_labels = [
-        _encode_result(int(r.home_goals), int(r.away_goals))
-        for _, r in df.iterrows()
-    ]
-    y_onehot = np.eye(3, dtype=float)[y_labels]
+    def _compute_group(group: pd.DataFrame) -> dict:
+        y_pred = group[["prob_home", "prob_draw", "prob_away"]].values
+        y_labels = [
+            _encode_result(int(r.home_goals), int(r.away_goals))
+            for _, r in group.iterrows()
+        ]
+        y_onehot = np.eye(3, dtype=float)[y_labels]
+        return {
+            "brier_score": brier_score(y_onehot, y_pred),
+            "rps": ranked_probability_score(y_onehot, y_pred),
+            "log_loss": log_loss_score(np.array(y_labels), y_pred),
+            "n_samples": len(group),
+        }
 
-    bs = brier_score(y_onehot, y_pred)
-    rps = ranked_probability_score(y_onehot, y_pred)
-    ll = log_loss_score(np.array(y_labels), y_pred)
+    if breakdown_cols:
+        valid_cols = [c for c in breakdown_cols if c in df.columns]
+        if valid_cols:
+            records = []
+            for group_key, group_df in df.groupby(valid_cols):
+                row = _compute_group(group_df)
+                if isinstance(group_key, tuple):
+                    for col, val in zip(valid_cols, group_key):
+                        row[col] = val
+                else:
+                    row[valid_cols[0]] = group_key
+                records.append(row)
+            result = pd.DataFrame(records)
+            logger.info(
+                "Metrics breakdown by %s: %d groups.", valid_cols, len(result)
+            )
+            return result
 
+    metrics = _compute_group(df)
     logger.info(
         "Metrics on %d samples: BS=%.4f, RPS=%.4f, LL=%.4f",
-        len(df), bs, rps, ll,
+        metrics["n_samples"],
+        metrics["brier_score"],
+        metrics["rps"],
+        metrics["log_loss"],
     )
+    return pd.DataFrame([metrics])
 
-    return pd.DataFrame(
-        [{"brier_score": bs, "rps": rps, "log_loss": ll, "n_samples": len(df)}]
+
+def compute_xg_vs_goals_accuracy(matches_df: pd.DataFrame) -> pd.DataFrame:
+    """Compare xG-based predictions against goals-based predictions.
+
+    Validates whether using xG as the model's response variable
+    improves predictive accuracy compared to actual goals.
+
+    Args:
+        matches_df: DataFrame with columns: home_goals, away_goals,
+            home_xg, away_xg.
+
+    Returns:
+        DataFrame with columns: metric, goals_based, xg_based, delta.
+    """
+    df = matches_df.dropna(
+        subset=["home_goals", "away_goals", "home_xg", "away_xg"]
+    ).copy()
+
+    if df.empty:
+        logger.warning("compute_xg_vs_goals_accuracy: no rows with xG data.")
+        return pd.DataFrame(columns=["metric", "goals_based", "xg_based", "delta"])
+
+    # Use xG as a "prediction" of the actual outcome
+    results = []
+    for label, h_col, a_col in [
+        ("goals", "home_goals", "away_goals"),
+        ("xg", "home_xg", "away_xg"),
+    ]:
+        # Treat the column values as lambda estimates for a simple Poisson 1X2
+        from model.markets import compute_score_matrix, compute_1x2
+
+        pred_probs = []
+        true_labels = []
+        for _, row in df.iterrows():
+            lh = max(float(row[h_col]), 0.1)
+            la = max(float(row[a_col]), 0.1)
+            mat = compute_score_matrix(lh, la, rho=0.0, max_goals=6)
+            p = compute_1x2(mat)
+            pred_probs.append([p["home"], p["draw"], p["away"]])
+            true_labels.append(
+                _encode_result(int(row["home_goals"]), int(row["away_goals"]))
+            )
+
+        y_pred = np.array(pred_probs)
+        y_onehot = np.eye(3, dtype=float)[true_labels]
+        results.append({
+            "source": label,
+            "brier": brier_score(y_onehot, y_pred),
+            "rps": ranked_probability_score(y_onehot, y_pred),
+        })
+
+    goals_r = results[0]
+    xg_r = results[1]
+
+    comparison = pd.DataFrame([
+        {
+            "metric": "brier_score",
+            "goals_based": goals_r["brier"],
+            "xg_based": xg_r["brier"],
+            "delta": xg_r["brier"] - goals_r["brier"],
+        },
+        {
+            "metric": "rps",
+            "goals_based": goals_r["rps"],
+            "xg_based": xg_r["rps"],
+            "delta": xg_r["rps"] - goals_r["rps"],
+        },
+    ])
+
+    logger.info(
+        "xG vs Goals: Brier Δ=%.4f, RPS Δ=%.4f (negative = xG better)",
+        comparison.iloc[0]["delta"],
+        comparison.iloc[1]["delta"],
     )
+    return comparison
 
 
 def compare_to_market(
